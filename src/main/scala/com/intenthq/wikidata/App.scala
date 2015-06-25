@@ -4,15 +4,17 @@ import java.io.{File, FileInputStream}
 import java.util.zip.GZIPInputStream
 
 import akka.actor.ActorSystem
-import akka.stream.ActorFlowMaterializer
+import akka.stream.ActorMaterializer
+import akka.stream.io.{Framing, InputStreamSource}
 import akka.stream.scaladsl._
+import akka.util.ByteString
 import org.json4s.JsonAST.JString
 import org.json4s.jackson.JsonMethods._
 import scopt.OptionParser
 
-import scala.concurrent.{Future, ExecutionContext}
+import scala.concurrent.{ExecutionContext, Future}
 import scala.io.{Source => ioSource}
-import scala.util.{Success, Try, Failure}
+import scala.util.{Failure, Success, Try}
 
 object App {
 
@@ -42,7 +44,7 @@ object App {
 
   def task(config: Config): Int = {
     implicit val system = ActorSystem("wikidata-poc")
-    implicit val materializer = ActorFlowMaterializer()
+    implicit val materializer = ActorMaterializer()
     import system.dispatcher
 
     val elements = source(config.input).via(parseJson(config.langs))
@@ -67,10 +69,11 @@ object App {
     0
   }
 
-  def source(file: File): Source[String, Unit] = {
+  def source(file: File): Source[String, Future[Long]] = {
     val compressed = new GZIPInputStream(new FileInputStream(file), 65536)
-    val source = ioSource.fromInputStream(compressed, "utf-8")
-    Source(() => source.getLines()).drop(1)
+    InputStreamSource(() => compressed)
+      .via(Framing.delimiter(ByteString("\n"), Int.MaxValue))
+      .map(x => x.decodeString("utf-8"))
   }
 
   def parseJson(langs: Seq[String])(implicit ec: ExecutionContext): Flow[String, WikidataElement, Unit] =
